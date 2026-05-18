@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+from typing import Any
+
+from fastapi import APIRouter, Body, HTTPException
+
+from app.models.migration_models import CommandResult, MigrationConfig
+from app.services.migration_service import MigrationService
+
+router = APIRouter(prefix="/api/migration", tags=["migration"])
+service = MigrationService()
+
+
+def parse_config(payload: dict[str, Any]) -> MigrationConfig:
+    """
+    Accepts both frontend payload styles:
+
+    1. Direct config:
+       { "source": {...}, "target": {...} }
+
+    2. Wrapped config:
+       { "config": { "source": {...}, "target": {...} } }
+    """
+    try:
+        if "config" in payload and isinstance(payload["config"], dict):
+            payload = payload["config"]
+
+        return MigrationConfig.model_validate(payload)
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Invalid migration configuration payload",
+                "error": str(exc),
+                "received_keys": list(payload.keys()) if isinstance(payload, dict) else None,
+                "hint": "Send the MigrationConfig object directly, or wrap it as {'config': MigrationConfig}.",
+            },
+        ) from exc
+
+
+@router.post("/precheck", response_model=CommandResult)
+def precheck(payload: dict[str, Any] = Body(...)) -> CommandResult:
+    config = parse_config(payload)
+    return service.precheck(config)
+
+
+@router.post("/lm2-backup", response_model=CommandResult)
+def lm2_backup(payload: dict[str, Any] = Body(...)) -> CommandResult:
+    config = parse_config(payload)
+    return service.lm2_backup(config)
+
+
+@router.post("/lm1-create-snapshot", response_model=CommandResult)
+def lm1_create_snapshot(payload: dict[str, Any] = Body(...)) -> CommandResult:
+    config = parse_config(payload)
+    return service.lm1_create_snapshot(config)
+
+
+@router.post("/lm2-cleanup-old-source", response_model=CommandResult)
+def lm2_cleanup_old_source(payload: dict[str, Any] = Body(...)) -> CommandResult:
+    config = parse_config(payload)
+    return service.lm2_cleanup_old_source(config)
+
+
+@router.post("/lm1-transfer-snapshot", response_model=CommandResult)
+def lm1_transfer_snapshot(payload: dict[str, Any] = Body(...)) -> CommandResult:
+    config = parse_config(payload)
+    return service.lm1_transfer_snapshot(config)
+
+
+@router.post("/lm2-merge", response_model=CommandResult)
+def lm2_merge(payload: dict[str, Any] = Body(...)) -> CommandResult:
+    config = parse_config(payload)
+    return service.lm2_merge(config)
+
+
+@router.post("/validate", response_model=CommandResult)
+def validate(payload: dict[str, Any] = Body(...)) -> CommandResult:
+    config = parse_config(payload)
+    return service.validate(config)
+
+
+@router.post("/grafana-check", response_model=CommandResult)
+def grafana_check(payload: dict[str, Any] = Body(...)) -> CommandResult:
+    config = parse_config(payload)
+    return service.grafana_check(config)
+
+
+@router.get("/history")
+def history() -> list[dict[str, Any]]:
+    return service.history()
+
+
+@router.get("/proof/{migration_id}")
+def proof(migration_id: str) -> dict[str, Any]:
+    result = service.get_proof(migration_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Proof file not found")
+    return result

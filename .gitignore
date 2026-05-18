@@ -1,0 +1,7 @@
+backend/.venv/
+backend/storage/logs/*.log
+backend/storage/proofs/*.json
+backend/storage/migration_history.json
+frontend/node_modules/
+frontend/.next/
+.env

@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+import os
+
+from fastapi import APIRouter, Depends
+
+from app.models.migration_models import CommandResult, MigrationConfig
+from app.services.migration_service import MigrationService
+from app.services.proof_service import ProofService
+
+router = APIRouter(prefix="/api/migration", tags=["migration"])
+
+
+def get_proof_service() -> ProofService:
+    storage_dir = os.getenv("APP_STORAGE_DIR", "./storage")
+    return ProofService(storage_dir=storage_dir)
+
+
+def get_migration_service(proof_service: ProofService = Depends(get_proof_service)) -> MigrationService:
+    return MigrationService(proof_service=proof_service)
+
+
+@router.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@router.post("/precheck", response_model=CommandResult)
+def precheck(config: MigrationConfig, service: MigrationService = Depends(get_migration_service)) -> CommandResult:
+    return service.precheck(config)
+
+
+@router.post("/backup-create", response_model=CommandResult)
+def backup_create(config: MigrationConfig, service: MigrationService = Depends(get_migration_service)) -> CommandResult:
+    return service.create_lm2_backup(config)
+
+
+@router.post("/lm1-create-snapshot", response_model=CommandResult)
+def lm1_create_snapshot(
+    config: MigrationConfig, service: MigrationService = Depends(get_migration_service)
+) -> CommandResult:
+    return service.lm1_create_snapshot(config)
+
+
+@router.post("/lm2-cleanup-old-source", response_model=CommandResult)
+def lm2_cleanup_old_source(
+    config: MigrationConfig, service: MigrationService = Depends(get_migration_service)
+) -> CommandResult:
+    return service.lm2_cleanup_old_source(config)
+
+
+@router.post("/lm1-transfer-snapshot", response_model=CommandResult)
+def lm1_transfer_snapshot(
+    config: MigrationConfig, service: MigrationService = Depends(get_migration_service)
+) -> CommandResult:
+    return service.lm1_transfer_snapshot(config)
+
+
+@router.post("/lm2-merge", response_model=CommandResult)
+def lm2_merge(config: MigrationConfig, service: MigrationService = Depends(get_migration_service)) -> CommandResult:
+    return service.lm2_merge(config)
+
+
+@router.post("/validate", response_model=CommandResult)
+def validate(config: MigrationConfig, service: MigrationService = Depends(get_migration_service)) -> CommandResult:
+    return service.validate(config)
+
+
+@router.post("/grafana-check", response_model=CommandResult)
+def grafana_check(config: MigrationConfig, service: MigrationService = Depends(get_migration_service)) -> CommandResult:
+    return service.grafana_check(config)
+
+
+@router.get("/proof/{migration_id}")
+def proof(migration_id: str, proof_service: ProofService = Depends(get_proof_service)) -> dict:
+    return proof_service.read_proof(migration_id)
+
+
+@router.get("/history")
+def history(proof_service: ProofService = Depends(get_proof_service)) -> list[dict]:
+    return proof_service.read_history()
