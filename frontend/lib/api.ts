@@ -1,6 +1,9 @@
 import { CommandResult, MigrationConfig } from "./types";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL ||
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  "http://localhost:8000";
 
 async function postStage(path: string, config: MigrationConfig): Promise<CommandResult> {
   const response = await fetch(`${API_BASE}${path}`, {
