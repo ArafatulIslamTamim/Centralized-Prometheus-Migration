@@ -16,11 +16,20 @@ app = FastAPI(
     description="FastAPI backend for controlled LM1 to LM2 Prometheus TSDB migration.",
 )
 
-frontend_origin = os.getenv("FRONTEND_ORIGIN", "http://localhost:3001")
+frontend_origin = os.getenv(
+    "FRONTEND_ORIGIN",
+    "https://centralized-prometheus-migration-frontend.onrender.com",
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_origin, "http://localhost:3000", "http://127.0.0.1:3001"],
+    allow_origins=[
+        frontend_origin,
+        "https://centralized-prometheus-migration-frontend.onrender.com",
+        "http://localhost:3001",
+        "http://localhost:3000",
+        "http://127.0.0.1:3001",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
