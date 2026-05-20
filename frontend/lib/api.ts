@@ -22,7 +22,7 @@ async function postStage(path: string, config: MigrationConfig): Promise<Command
 
 export const migrationApi = {
   precheck: (config: MigrationConfig) => postStage("/api/migration/precheck", config),
-  backupCreate: (config: MigrationConfig) => postStage("/api/migration/backup-create", config),
+  backupCreate: (config: MigrationConfig) => postStage("/api/migration/lm2-backup", config),
   lm1CreateSnapshot: (config: MigrationConfig) => postStage("/api/migration/lm1-create-snapshot", config),
   lm2CleanupOldSource: (config: MigrationConfig) => postStage("/api/migration/lm2-cleanup-old-source", config),
   lm1TransferSnapshot: (config: MigrationConfig) => postStage("/api/migration/lm1-transfer-snapshot", config),

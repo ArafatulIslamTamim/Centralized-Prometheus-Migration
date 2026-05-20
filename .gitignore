@@ -5,3 +5,23 @@ backend/storage/migration_history.json
 frontend/node_modules/
 frontend/.next/
 .env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Python virtual environment
+.venv/
+venv/
+
+# Node / Next.js
+node_modules/
+.next/
+.env
+.env.local
+
+# Logs / generated files
+backend/storage/logs/
+backend/storage/proofs/
+backend/storage/migration_history.json
