@@ -21,16 +21,24 @@ frontend_origin = os.getenv(
     "https://centralized-prometheus-migration-frontend.onrender.com",
 )
 
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=[
+#         frontend_origin,
+#         "https://centralized-prometheus-migration-frontend.onrender.com",
+#         "http://localhost:3001",
+#         "http://localhost:3000",
+#         "http://127.0.0.1:3001",
+#     ],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        frontend_origin,
-        "https://centralized-prometheus-migration-frontend.onrender.com",
-        "http://localhost:3001",
-        "http://localhost:3000",
-        "http://127.0.0.1:3001",
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

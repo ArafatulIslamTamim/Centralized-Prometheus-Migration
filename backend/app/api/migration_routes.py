@@ -82,7 +82,7 @@ async def precheck(request: Request) -> CommandResult:
 @router.post("/lm2-backup", response_model=CommandResult)
 async def lm2_backup(request: Request) -> CommandResult:
     config = await parse_request_config(request)
-    return service.lm2_backup(config)
+    return service.create_lm2_backup(config)
 
 
 @router.post("/lm1-create-snapshot", response_model=CommandResult)
