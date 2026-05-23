@@ -544,6 +544,4 @@ Before committing:
 git status
 ```
 
-Commit only real source code changes, not cache files.
-
 ---
