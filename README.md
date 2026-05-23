@@ -547,7 +547,3 @@ git status
 Commit only real source code changes, not cache files.
 
 ---
-
-## License
-
-Add your project license here.
