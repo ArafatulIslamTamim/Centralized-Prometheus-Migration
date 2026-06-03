@@ -148,11 +148,11 @@ printf '\\n=== Target disk ===\\n'
 du -sh {config.target_prom_path!r} 2>/dev/null || true
 df -h
 
-printf '\\n=== Target source_env labels ===\\n'
+printf '\\n=== Target Prometheus label names ===\\n'
 if command -v jq >/dev/null 2>&1; then
-  curl -s http://localhost:9090/api/v1/label/source_env/values | jq . || true
+  curl -s http://localhost:9090/api/v1/labels | jq '.data[:50]' || true
 else
-  curl -s http://localhost:9090/api/v1/label/source_env/values || true
+  curl -s http://localhost:9090/api/v1/labels || true
 fi
 
 printf '\\n=== Target Grafana health using configured URL ===\\n'
@@ -273,7 +273,7 @@ PROOF_DIR="$HOME/lm1-migration-proof"
 mkdir -p "$PROOF_DIR"
 
 echo "=== Migration parameters ==="
-echo "SOURCE_ENV_OLD=$SOURCE_ENV_OLD"
+echo "SOURCE_ENV_OLD=$SOURCE_ENV_OLD (not used in no-label mode)"
 echo "LM1_PROM_PATH=$LM1_PROM_PATH"
 echo "LM1 data range: $LM1_DATA_START to $LM1_DATA_END"
 echo "RANGE_SEC=$RANGE_SEC"
@@ -321,11 +321,13 @@ curl http://localhost:9090/-/ready
 
 echo "=== Count source samples before snapshot ==="
 
-OLD_SELECTOR=$(printf '{{source_env="%s"}}' "$SOURCE_ENV_OLD")
+# No-label mode for old Prometheus data.
+# The old LM1 TSDB has no source_env label, so validate the full up metric.
+OLD_SELECTOR=""
 
-FILTERED_TOTAL_QUERY="sum(count_over_time(up$OLD_SELECTOR[${{RANGE_SEC}}s]))"
-FILTERED_GROUP_QUERY="sum by (job, instance, source_env) (count_over_time(up$OLD_SELECTOR[${{RANGE_SEC}}s]))"
-DEBUG_GROUP_QUERY="sum by (job, instance, source_env) (count_over_time(up[${{RANGE_SEC}}s]))"
+FILTERED_TOTAL_QUERY="sum(count_over_time(up[${{RANGE_SEC}}s]))"
+FILTERED_GROUP_QUERY="sum by (job, instance) (count_over_time(up[${{RANGE_SEC}}s]))"
+DEBUG_GROUP_QUERY="sum by (job, instance) (count_over_time(up[${{RANGE_SEC}}s]))"
 
 echo "Filtered total query:"
 echo "$FILTERED_TOTAL_QUERY"
@@ -338,29 +340,29 @@ TOTAL_COUNT=$(curl -sG http://localhost:9090/api/v1/query \
 echo "$TOTAL_COUNT" | tee "$PROOF_DIR/lm1_up_total_before_snapshot.txt"
 
 if [ "$TOTAL_COUNT" = "0" ]; then
-  echo "ERROR: No source samples found for source_env=$SOURCE_ENV_OLD in the selected time range."
-  echo "SOURCE_ENV_OLD=$SOURCE_ENV_OLD"
+  echo "ERROR: No up samples found in the selected time range."
+  echo "SOURCE_ENV_OLD=$SOURCE_ENV_OLD (not used in no-label mode)"
   echo "LM1_DATA_START=$LM1_DATA_START"
   echo "LM1_DATA_END=$LM1_DATA_END"
   echo "START_TS=$START_TS"
   echo "END_TS=$END_TS"
   echo "RANGE_SEC=$RANGE_SEC"
   echo
-  echo "Debug: source_env label values:"
-  curl -s http://localhost:9090/api/v1/label/source_env/values | jq
+  echo "Debug: available label names:"
+  curl -s http://localhost:9090/api/v1/labels | jq '.data[:80]'
   echo
-  echo "Debug: up samples without source_env filter:"
+  echo "Debug: up samples without label filter:"
   curl -sG http://localhost:9090/api/v1/query \
     --data-urlencode "query=$DEBUG_GROUP_QUERY" \
     --data-urlencode "time=${{END_TS}}" \
-    | jq '.data.result[]? | {{job: .metric.job, instance: .metric.instance, source_env: (.metric.source_env // "MISSING"), samples: .value[1]}}'
+    | jq '.data.result[]? | {{job: .metric.job, instance: .metric.instance, samples: .value[1]}}'
   exit 20
 fi
 
 curl -sG http://localhost:9090/api/v1/query \
   --data-urlencode "query=$FILTERED_GROUP_QUERY" \
   --data-urlencode "time=${{END_TS}}" \
-  | jq -r '.data.result[]? | [(.metric.job // "unknown_job"), (.metric.instance // "unknown_instance"), (.metric.source_env // "unknown_source"), .value[1]] | @tsv' \
+  | jq -r '.data.result[]? | [(.metric.job // "unknown_job"), (.metric.instance // "unknown_instance"), .value[1]] | @tsv' \
   | sort \
   | tee "$PROOF_DIR/lm1_up_by_job_instance_before_snapshot.tsv"
 
@@ -454,90 +456,20 @@ echo "=== Snapshot transfer completed ==="
     def lm2_cleanup_old_source(self, config: MigrationConfig) -> CommandResult:
         migration_id = config.migration_id or self.proof_service.new_migration_id()
         started_at = _now()
-        expected = f"DELETE {config.source_env_old} FROM {config.target.name}"
-        if (config.cleanup_confirmation or "").strip() != expected:
-            return self._result(
-                config,
-                migration_id,
-                "lm2_cleanup_old_source",
-                "Optional LM2 Cleanup",
-                started_at,
-                False,
-                f"Confirmation mismatch. Type exactly: {expected}",
-            )
-        sudo_pass = config.target.sudo_password or config.target.ssh_password or ""
-        sudo_auth = sudo_prefix(sudo_pass)
-        script = f"""
-set -euo pipefail
-SOURCE_ENV_OLD={config.source_env_old!r}
-OLD_SELECTOR=$(printf '{{source_env="%s"}}' "$SOURCE_ENV_OLD")
-LM1_DATA_START={config.lm1_data_start!r}
-LM1_DATA_END={config.lm1_data_end!r}
-START_TS=$(date -d "$LM1_DATA_START" +%s)
-END_TS=$(date -d "$LM1_DATA_END" +%s)
-RANGE_SEC=$((END_TS - START_TS))
 
-echo "=== Authenticate sudo on target ==="
-{sudo_auth}
-
-echo "=== Check existing source-labelled data on target before cleanup ==="
-echo "Selector: $OLD_SELECTOR"
-curl -sG http://localhost:9090/api/v1/query \
-  --data-urlencode "query=sum(count_over_time(up${{OLD_SELECTOR}}[${{RANGE_SEC}}s]))" \
-  --data-urlencode "time=${{END_TS}}" \
-  | jq -r '.data.result[0].value[1] // "0"' \
-  | tee /tmp/lm1_count_before_cleanup_on_lm2.txt
-
-echo "=== Delete old source-labelled series from target ==="
-DELETE_STATUS=$(curl -s -o /tmp/delete_series_response.txt -w "%{{http_code}}" \
-  -X POST http://localhost:9090/api/v1/admin/tsdb/delete_series \
-  --data-urlencode "match[]=$OLD_SELECTOR")
-
-echo "delete_series HTTP status: $DELETE_STATUS"
-cat /tmp/delete_series_response.txt || true
-echo
-
-if [ "$DELETE_STATUS" != "204" ]; then
-  echo "ERROR: delete_series failed. Expected HTTP 204."
-  echo "Selector was: $OLD_SELECTOR"
-  exit 51
-fi
-
-echo "=== Clean tombstones ==="
-CLEAN_STATUS=$(curl -s -o /tmp/clean_tombstones_response.txt -w "%{{http_code}}" \
-  -X POST http://localhost:9090/api/v1/admin/tsdb/clean_tombstones)
-
-echo "clean_tombstones HTTP status: $CLEAN_STATUS"
-cat /tmp/clean_tombstones_response.txt || true
-echo
-
-if [ "$CLEAN_STATUS" != "204" ]; then
-  echo "ERROR: clean_tombstones failed. Expected HTTP 204."
-  exit 52
-fi
-
-echo "=== Restart target Prometheus ==="
-sudo systemctl restart prometheus
-sleep 5
-curl http://localhost:9090/-/healthy
-curl http://localhost:9090/-/ready
-
-echo "=== Verify source-labelled data was removed from target ==="
-curl -sG http://localhost:9090/api/v1/query \
-  --data-urlencode "query=sum(count_over_time(up${{OLD_SELECTOR}}[${{RANGE_SEC}}s]))" \
-  --data-urlencode "time=${{END_TS}}" \
-  | jq -r '.data.result[0].value[1] // "0"' \
-  | tee /tmp/lm1_count_after_cleanup_on_lm2.txt
-"""
-        try:
-            with SSHRunner(config.target) as tgt:
-                res = tgt.run_bash(script, timeout=1200)
-                ok = res.exit_code == 0
-                output = res.combined
-        except Exception as e:
-            ok = False
-            output = f"Cleanup error: {e}"
-        return self._result(config, migration_id, "lm2_cleanup_old_source", "Optional LM2 Cleanup", started_at, ok, output)
+        # Cleanup is disabled for this no-label migration mode.
+        # Your old LM1 Prometheus data has no source_env label, so delete_series
+        # cannot safely identify only old LM1 data on the target.
+        # Skip the Optional Cleanup button for this migration.
+        return self._result(
+            config,
+            migration_id,
+            "lm2_cleanup_old_source",
+            "Optional LM2 Cleanup",
+            started_at,
+            False,
+            "Cleanup is disabled in no-label mode. Skip this step because the old Prometheus data has no source_env label.",
+        )
 
     def lm2_merge(self, config: MigrationConfig) -> CommandResult:
         migration_id = config.migration_id or self.proof_service.new_migration_id()
@@ -616,18 +548,18 @@ sleep 5
 curl http://localhost:9090/-/healthy
 curl http://localhost:9090/-/ready
 
-echo "=== Verify source_env values ==="
-curl -s http://localhost:9090/api/v1/label/source_env/values | jq
+echo "=== Verify available labels after merge ==="
+curl -s http://localhost:9090/api/v1/labels | jq '.data[:80]'
 
 echo "=== Count source samples after merge on target ==="
 curl -sG http://localhost:9090/api/v1/query \
-  --data-urlencode "query=sum(count_over_time(up{{source_env=\"${{SOURCE_ENV_OLD}}\"}}[${{RANGE_SEC}}s]))" \
+  --data-urlencode "query=sum(count_over_time(up[${{RANGE_SEC}}s]))" \
   --data-urlencode "time=${{END_TS}}" \
   | jq -r '.data.result[0].value[1] // "0"' \
   | tee /tmp/lm1_up_total_after_merge_on_lm2.txt
 
 curl -sG http://localhost:9090/api/v1/query \
-  --data-urlencode "query=sum by (job, instance) (count_over_time(up{{source_env=\"${{SOURCE_ENV_OLD}}\"}}[${{RANGE_SEC}}s]))" \
+  --data-urlencode "query=sum by (job, instance) (count_over_time(up[${{RANGE_SEC}}s]))" \
   --data-urlencode "time=${{END_TS}}" \
   | jq -r '.data.result[]? | [(.metric.job // "unknown_job"), (.metric.instance // "unknown_instance"), .value[1]] | @tsv' \
   | sort \
@@ -654,8 +586,8 @@ echo "NOTE: Merge completed. Strict source sample validation is handled by the R
 
 echo "=== Validate target live/current data ==="
 curl -sG http://localhost:9090/api/v1/query \
-  --data-urlencode "query=up{{source_env=\"${{SOURCE_ENV_NEW}}\"}}" \
-  | jq '.data.result[]? | {{job: .metric.job, instance: .metric.instance, source_env: .metric.source_env, value: .value[1]}}'
+  --data-urlencode "query=up" \
+  | jq '.data.result[]? | {{job: .metric.job, instance: .metric.instance, value: .value[1]}}'
 
 echo "=== Target merge and validation completed ==="
 
@@ -688,25 +620,26 @@ echo "=== Target Prometheus health ==="
 curl http://localhost:9090/-/healthy
 curl http://localhost:9090/-/ready
 
-echo "=== source_env label values ==="
-curl -s http://localhost:9090/api/v1/label/source_env/values | jq
+echo "=== Available label names ==="
+curl -s http://localhost:9090/api/v1/labels | jq '.data[:80]'
 
 echo "=== Source imported sample count by job/instance ==="
 curl -sG http://localhost:9090/api/v1/query \
-  --data-urlencode "query=sum by (job, instance) (count_over_time(up{{source_env=\"${{SOURCE_ENV_OLD}}\"}}[${{RANGE_SEC}}s]))" \
+  --data-urlencode "query=sum by (job, instance) (count_over_time(up[${{RANGE_SEC}}s]))" \
   --data-urlencode "time=${{END_TS}}" \
   | jq '.data.result[]? | {{job: .metric.job, instance: .metric.instance, samples: .value[1]}}'
 
 echo "=== Target live target status ==="
 curl -sG http://localhost:9090/api/v1/query \
-  --data-urlencode "query=up{{source_env=\"${{SOURCE_ENV_NEW}}\"}}" \
+  --data-urlencode "query=up" \
   | jq '.data.result[]? | {{job: .metric.job, instance: .metric.instance, value: .value[1]}}'
 
 echo "=== Retry source sample count before final validation ==="
 
-VALIDATE_SELECTOR=$(printf '{{source_env="%s"}}' "$SOURCE_ENV_OLD")
-VALIDATE_TOTAL_QUERY="sum(count_over_time(up$VALIDATE_SELECTOR[${{RANGE_SEC}}s]))"
-VALIDATE_GROUP_QUERY="sum by (job, instance, source_env) (count_over_time(up$VALIDATE_SELECTOR[${{RANGE_SEC}}s]))"
+# No-label validation mode. The old data has no source_env label.
+VALIDATE_SELECTOR=""
+VALIDATE_TOTAL_QUERY="sum(count_over_time(up[${{RANGE_SEC}}s]))"
+VALIDATE_GROUP_QUERY="sum by (job, instance) (count_over_time(up[${{RANGE_SEC}}s]))"
 
 echo "Validation total query:"
 echo "$VALIDATE_TOTAL_QUERY"
@@ -733,7 +666,7 @@ done
 curl -sG http://localhost:9090/api/v1/query \
   --data-urlencode "query=$VALIDATE_GROUP_QUERY" \
   --data-urlencode "time=${{END_TS}}" \
-  | jq -r '.data.result[]? | [(.metric.job // "unknown_job"), (.metric.instance // "unknown_instance"), (.metric.source_env // "unknown_source"), .value[1]] | @tsv' \
+  | jq -r '.data.result[]? | [(.metric.job // "unknown_job"), (.metric.instance // "unknown_instance"), .value[1]] | @tsv' \
   | sort \
   | tee /tmp/lm1_up_by_job_instance_after_merge_on_lm2.tsv
 
