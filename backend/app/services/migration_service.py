@@ -47,49 +47,146 @@ class MigrationService:
         proof: dict[str, Any] = {"checks": {}}
 
         output_parts.append("=== Local backend network check ===")
+
+        # Only check SSH ports from the backend.
+        # Grafana is checked from the target machine using config.grafana_url.
         for label, host, port in [
             (f"{config.source.name} SSH", config.source.host, 22),
             (f"{config.target.name} SSH", config.target.host, 22),
-            (f"{config.target.name} Grafana", config.target.host, 3000),
         ]:
             reachable = check_port(host, port)
             proof["checks"][label] = reachable
             output_parts.append(f"{label}: {'PASS' if reachable else 'FAIL'} ({host}:{port})")
             ok = ok and reachable
 
+        grafana_password = config.grafana_password or ""
+
         source_script = f"""
 set -e
+
 hostname
-printf '\n=== Source identity ===\n'
-echo "Expected hostname: {config.source.expected_hostname or 'not configured'}"
-printf '\n=== Source Prometheus path ===\n'
-if [ -d {config.source_prom_path!r} ]; then ls -ld {config.source_prom_path!r}; else echo 'MISSING: {config.source_prom_path}'; exit 11; fi
-printf '\n=== Source Prometheus binary ===\n'
-if [ -x {config.prom_bin!r} ]; then {config.prom_bin!r} --version | head -3; else echo 'MISSING or not executable: {config.prom_bin}'; exit 12; fi
-printf '\n=== Source TSDB blocks ===\n'
-find {config.source_prom_path!r} -maxdepth 1 -type d -name '01*' -printf '%f\n' 2>/dev/null | sort || true
-printf '\n=== Source monitoring ports ===\n'
-ss -lntp | grep -E '9090|9100|9256|3000' || true
+
+printf '\\n=== Source identity ===\\n'
+ACTUAL_HOSTNAME=$(hostname)
+EXPECTED_HOSTNAME={config.source.expected_hostname!r}
+
+echo "Actual hostname: $ACTUAL_HOSTNAME"
+echo "Expected hostname: ${{EXPECTED_HOSTNAME:-not configured}}"
+
+if [ -n "$EXPECTED_HOSTNAME" ] && [ "$ACTUAL_HOSTNAME" != "$EXPECTED_HOSTNAME" ]; then
+  echo "ERROR: Source hostname mismatch."
+  echo "Expected: $EXPECTED_HOSTNAME"
+  echo "Actual: $ACTUAL_HOSTNAME"
+  exit 13
+fi
+
+printf '\\n=== Source Prometheus path ===\\n'
+if [ -d {config.source_prom_path!r} ]; then
+  ls -ld {config.source_prom_path!r}
+else
+  echo 'MISSING: {config.source_prom_path}'
+  exit 11
+fi
+
+printf '\\n=== Source Prometheus binary ===\\n'
+if [ -x {config.prom_bin!r} ]; then
+  {config.prom_bin!r} --version | head -3
+else
+  echo 'MISSING or not executable: {config.prom_bin}'
+  exit 12
+fi
+
+printf '\\n=== Source TSDB blocks ===\\n'
+find {config.source_prom_path!r} -maxdepth 1 -type d -name '01*' -printf '%f\\n' 2>/dev/null | sort || true
+
+printf '\\n=== Source monitoring ports ===\\n'
+ss -lntp | grep -E '9090|9100|9256|3000|3001|3002' || true
 """
+
         target_script = f"""
 set -e
+
+GRAFANA_URL={config.grafana_url!r}
+GRAFANA_USER={config.grafana_user!r}
+GRAFANA_PASS={grafana_password!r}
+
 hostname
-printf '\n=== Target identity ===\n'
-echo "Expected hostname: {config.target.expected_hostname or 'not configured'}"
-printf '\n=== Target Prometheus health ===\n'
+
+printf '\\n=== Target identity ===\\n'
+ACTUAL_HOSTNAME=$(hostname)
+EXPECTED_HOSTNAME={config.target.expected_hostname!r}
+
+echo "Actual hostname: $ACTUAL_HOSTNAME"
+echo "Expected hostname: ${{EXPECTED_HOSTNAME:-not configured}}"
+
+if [ -n "$EXPECTED_HOSTNAME" ] && [ "$ACTUAL_HOSTNAME" != "$EXPECTED_HOSTNAME" ]; then
+  echo "ERROR: Target hostname mismatch."
+  echo "Expected: $EXPECTED_HOSTNAME"
+  echo "Actual: $ACTUAL_HOSTNAME"
+  exit 23
+fi
+
+printf '\\n=== Target Prometheus health ===\\n'
 curl -s http://localhost:9090/-/healthy || true
+echo
 curl -s http://localhost:9090/-/ready || true
-printf '\n=== Target Prometheus path ===\n'
-if [ -d {config.target_prom_path!r} ]; then ls -ld {config.target_prom_path!r}; else echo 'MISSING: {config.target_prom_path}'; exit 21; fi
-printf '\n=== Target receive and backup directories ===\n'
+echo
+
+printf '\\n=== Target Prometheus path ===\\n'
+if [ -d {config.target_prom_path!r} ]; then
+  ls -ld {config.target_prom_path!r}
+else
+  echo 'MISSING: {config.target_prom_path}'
+  exit 21
+fi
+
+printf '\\n=== Target receive and backup directories ===\\n'
 mkdir -p {config.target_receive_dir!r} {config.target_backup_dir!r}
 ls -ld {config.target_receive_dir!r} {config.target_backup_dir!r}
-printf '\n=== Target disk ===\n'
+
+printf '\\n=== Target disk ===\\n'
 du -sh {config.target_prom_path!r} 2>/dev/null || true
 df -h
-printf '\n=== Target source_env labels ===\n'
-curl -s http://localhost:9090/api/v1/label/source_env/values | jq . || true
+
+printf '\\n=== Target source_env labels ===\\n'
+if command -v jq >/dev/null 2>&1; then
+  curl -s http://localhost:9090/api/v1/label/source_env/values | jq . || true
+else
+  curl -s http://localhost:9090/api/v1/label/source_env/values || true
+fi
+
+printf '\\n=== Target Grafana health using configured URL ===\\n'
+
+GRAFANA_BASE="${{GRAFANA_URL%/}}"
+
+if [ -z "$GRAFANA_BASE" ]; then
+  echo "WARNING: Grafana URL is empty. Skipping Grafana precheck."
+else
+  echo "Grafana URL: $GRAFANA_BASE"
+
+  GRAFANA_CODE=$(curl -sS -o /tmp/grafana_precheck_health.json -w "%{{http_code}}" \\
+    --connect-timeout 10 \\
+    -u "$GRAFANA_USER:$GRAFANA_PASS" \\
+    "$GRAFANA_BASE/api/health" || true)
+
+  echo "HTTP status: $GRAFANA_CODE"
+
+  if [ "$GRAFANA_CODE" -lt 200 ] || [ "$GRAFANA_CODE" -ge 300 ]; then
+    echo "ERROR: Grafana is not reachable using configured URL."
+    echo "This URL must be reachable from the target machine."
+    echo "Example: if Grafana runs on target port 3002, use http://localhost:3002"
+    cat /tmp/grafana_precheck_health.json 2>/dev/null || true
+    exit 24
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    jq . /tmp/grafana_precheck_health.json
+  else
+    cat /tmp/grafana_precheck_health.json
+  fi
+fi
 """
+
         try:
             with SSHRunner(config.source) as src:
                 res = src.run_bash(source_script, timeout=120)
@@ -108,7 +205,16 @@ curl -s http://localhost:9090/api/v1/label/source_env/values | jq . || true
             output_parts.append(f"\nTarget precheck error: {e}")
             ok = False
 
-        return self._result(config, migration_id, "precheck", "Pre-checks", started_at, ok, "\n".join(output_parts), proof)
+        return self._result(
+            config,
+            migration_id,
+            "precheck",
+            "Pre-checks",
+            started_at,
+            ok,
+            "\n".join(output_parts),
+            proof,
+        )
 
     def create_lm2_backup(self, config: MigrationConfig) -> CommandResult:
         migration_id = config.migration_id or self.proof_service.new_migration_id()
@@ -132,7 +238,7 @@ sudo du -sh "$TARGET_PROM_PATH" || true
 
 echo "=== Create rollback backup before cleanup or merge ==="
 BACKUP_FILE="$TARGET_BACKUP_DIR/lm2-prometheus-backup-before-migration-$(date +%Y%m%d-%H%M%S).tar.gz"
-sudo tar -C /var/lib -czf "$BACKUP_FILE" "$(basename "$TARGET_PROM_PATH")"
+sudo tar -C "$(dirname "$TARGET_PROM_PATH")" -czf "$BACKUP_FILE" "$(basename "$TARGET_PROM_PATH")"
 sudo chown "$USER":"$USER" "$BACKUP_FILE" || true
 ls -lh "$BACKUP_FILE"
 echo "BACKUP_FILE=$BACKUP_FILE"
@@ -450,27 +556,45 @@ START_TS=$(date -d "$LM1_DATA_START" +%s)
 END_TS=$(date -d "$LM1_DATA_END" +%s)
 RANGE_SEC=$((END_TS - START_TS))
 
+restart_prometheus() {{
+  echo "=== Safety restart target Prometheus if needed ==="
+  sudo systemctl start prometheus || true
+}}
+trap restart_prometheus EXIT
+
 echo "=== Authenticate sudo on target ==="
 {sudo_auth}
 
 echo "=== Check received source snapshot blocks ==="
 ls -lh "$LM2_RECEIVE_DIR"
-find "$LM2_RECEIVE_DIR" -maxdepth 1 -type d -name "01*" -printf "%f\n" | sort > /tmp/lm1_snapshot_blocks.txt
+find "$LM2_RECEIVE_DIR" -maxdepth 1 -type d -name "01*" -printf "%f\\n" | sort > /tmp/lm1_snapshot_blocks.txt
 cat /tmp/lm1_snapshot_blocks.txt
+
+BLOCK_COUNT=$(wc -l < /tmp/lm1_snapshot_blocks.txt | tr -d ' ')
+if [ "$BLOCK_COUNT" = "0" ]; then
+  echo "ERROR: No TSDB block directories found in receive directory: $LM2_RECEIVE_DIR"
+  exit 60
+fi
 
 echo "=== Stop target Prometheus before merge ==="
 sudo systemctl stop prometheus
 sudo ss -lntp | grep 9090 || echo "Target Prometheus stopped."
 
 echo "=== Check duplicate TSDB block IDs ==="
-sudo find "$LM2_PROM_PATH" -maxdepth 1 -type d -name "01*" -printf "%f\n" | sort > /tmp/lm2_existing_blocks.txt
+sudo find "$LM2_PROM_PATH" -maxdepth 1 -type d -name "01*" -printf "%f\\n" | sort > /tmp/lm2_existing_blocks.txt
 DUPES=$(comm -12 /tmp/lm1_snapshot_blocks.txt /tmp/lm2_existing_blocks.txt || true)
 echo "Duplicate block IDs:"
 echo "$DUPES"
 
 echo "=== Copy source TSDB blocks into target Prometheus storage if missing ==="
-for block in "$LM2_RECEIVE_DIR"/01*; do
-  id=$(basename "$block")
+while read -r id; do
+  block="$LM2_RECEIVE_DIR/$id"
+
+  if [ ! -d "$block" ]; then
+    echo "ERROR: Received block folder disappeared or is invalid: $block"
+    exit 61
+  fi
+
   if [ -d "$LM2_PROM_PATH/$id" ]; then
     echo "Replacing existing source block in LM2 storage: $id"
     sudo rm -rf "$LM2_PROM_PATH/$id"
@@ -478,7 +602,7 @@ for block in "$LM2_RECEIVE_DIR"/01*; do
 
   echo "Copying fresh source block: $id"
   sudo cp -a "$block" "$LM2_PROM_PATH/"
-done
+done < /tmp/lm1_snapshot_blocks.txt
 
 echo "=== Fix Prometheus ownership ==="
 sudo chown -R prometheus:prometheus "$LM2_PROM_PATH"
@@ -526,7 +650,6 @@ else
   echo "WARNING: /tmp/lm1_up_by_job_instance_before_snapshot.tsv not found. Skipping job/instance comparison."
 fi
 
-
 echo "NOTE: Merge completed. Strict source sample validation is handled by the Run Validation step."
 
 echo "=== Validate target live/current data ==="
@@ -535,6 +658,8 @@ curl -sG http://localhost:9090/api/v1/query \
   | jq '.data.result[]? | {{job: .metric.job, instance: .metric.instance, source_env: .metric.source_env, value: .value[1]}}'
 
 echo "=== Target merge and validation completed ==="
+
+trap - EXIT
 """
         try:
             with SSHRunner(config.target) as tgt:
@@ -572,13 +697,10 @@ curl -sG http://localhost:9090/api/v1/query \
   --data-urlencode "time=${{END_TS}}" \
   | jq '.data.result[]? | {{job: .metric.job, instance: .metric.instance, samples: .value[1]}}'
 
-
-
 echo "=== Target live target status ==="
 curl -sG http://localhost:9090/api/v1/query \
   --data-urlencode "query=up{{source_env=\"${{SOURCE_ENV_NEW}}\"}}" \
   | jq '.data.result[]? | {{job: .metric.job, instance: .metric.instance, value: .value[1]}}'
-
 
 echo "=== Retry source sample count before final validation ==="
 
@@ -648,18 +770,69 @@ fi
         migration_id = config.migration_id or self.proof_service.new_migration_id()
         started_at = _now()
         password = config.grafana_password or ""
+
         script = f"""
-set -e
+set -euo pipefail
+
 GRAFANA_URL={config.grafana_url!r}
 GRAFANA_USER={config.grafana_user!r}
 GRAFANA_PASS={password!r}
 
+GRAFANA_BASE="${{GRAFANA_URL%/}}"
+
+if [ -z "$GRAFANA_BASE" ]; then
+  echo "ERROR: Grafana URL is empty."
+  exit 30
+fi
+
+print_file() {{
+  if command -v jq >/dev/null 2>&1; then
+    jq . "$1"
+  else
+    cat "$1"
+  fi
+}}
+
+echo "=== Grafana configured URL ==="
+echo "$GRAFANA_BASE"
+
 echo "=== Grafana health ==="
-curl -s "$GRAFANA_URL/api/health" -u "$GRAFANA_USER:$GRAFANA_PASS" | jq
+HEALTH_CODE=$(curl -sS -o /tmp/grafana_health.json -w "%{{http_code}}" \\
+  --connect-timeout 10 \\
+  -u "$GRAFANA_USER:$GRAFANA_PASS" \\
+  "$GRAFANA_BASE/api/health" || true)
+
+echo "HTTP status: $HEALTH_CODE"
+
+if [ "$HEALTH_CODE" -lt 200 ] || [ "$HEALTH_CODE" -ge 300 ]; then
+  echo "ERROR: Grafana health check failed."
+  echo "This URL must be reachable from the target machine."
+  echo "Example: if Grafana runs on target port 3002, use http://localhost:3002"
+  cat /tmp/grafana_health.json 2>/dev/null || true
+  exit 31
+fi
+
+print_file /tmp/grafana_health.json
 
 echo "=== Grafana datasources ==="
-curl -s "$GRAFANA_URL/api/datasources" -u "$GRAFANA_USER:$GRAFANA_PASS" \
-  | jq '.[] | {{name, type, url, access, isDefault}}'
+DS_CODE=$(curl -sS -o /tmp/grafana_datasources.json -w "%{{http_code}}" \\
+  --connect-timeout 10 \\
+  -u "$GRAFANA_USER:$GRAFANA_PASS" \\
+  "$GRAFANA_BASE/api/datasources" || true)
+
+echo "HTTP status: $DS_CODE"
+
+if [ "$DS_CODE" -lt 200 ] || [ "$DS_CODE" -ge 300 ]; then
+  echo "ERROR: Grafana datasource check failed."
+  cat /tmp/grafana_datasources.json 2>/dev/null || true
+  exit 32
+fi
+
+if command -v jq >/dev/null 2>&1; then
+  jq '.[] | {{name, type, url, access, isDefault}}' /tmp/grafana_datasources.json
+else
+  cat /tmp/grafana_datasources.json
+fi
 """
         try:
             with SSHRunner(config.target) as tgt:
