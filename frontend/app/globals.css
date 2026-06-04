@@ -247,6 +247,58 @@ small,
   line-height: 1.4;
 }
 
+
+.flow-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.flow-switch button,
+.advanced-toggle {
+  border: 1px solid rgba(148, 163, 184, .18);
+  background: rgba(15, 23, 42, .72);
+  color: #cbd5e1;
+  padding: 10px 12px;
+}
+
+.flow-switch button.active {
+  border-color: rgba(79, 124, 255, .62);
+  background: linear-gradient(135deg, rgba(79, 124, 255, .92), rgba(59, 130, 246, .78));
+  color: white;
+}
+
+.workflow-hint {
+  border: 1px solid rgba(34, 211, 238, .20);
+  background: rgba(8, 145, 178, .10);
+  border-radius: 16px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+
+.workflow-hint p {
+  margin: 0;
+  color: #cffafe;
+  line-height: 1.55;
+  font-size: 13px;
+}
+
+.range-zone {
+  border-color: rgba(34, 211, 238, .28);
+  background: linear-gradient(180deg, rgba(8, 145, 178, .18), rgba(12, 74, 110, .10));
+}
+
+.snapshot-zone {
+  border-color: rgba(139, 92, 246, .30);
+  background: linear-gradient(180deg, rgba(88, 28, 135, .18), rgba(49, 46, 129, .10));
+}
+
+.advanced-toggle {
+  min-height: 38px;
+  font-size: 13px;
+}
+
 .action-card {
   position: sticky;
   top: 18px;
@@ -494,5 +546,7 @@ button:disabled {
     grid-template-columns: 1fr;
     display: grid;
   }
-  .action-card { position: static; }
+  
+
+.action-card { position: static; }
 }
