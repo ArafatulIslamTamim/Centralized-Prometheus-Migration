@@ -21,13 +21,40 @@ async function postStage(path: string, config: MigrationConfig): Promise<Command
 }
 
 export const migrationApi = {
-  precheck: (config: MigrationConfig) => postStage("/api/migration/precheck", config),
-  backupCreate: (config: MigrationConfig) => postStage("/api/migration/lm2-backup", config),
-  lm1CreateSnapshot: (config: MigrationConfig) => postStage("/api/migration/lm1-create-snapshot", config),
-  lm2CleanupOldSource: (config: MigrationConfig) => postStage("/api/migration/lm2-cleanup-old-source", config),
-  lm1TransferSnapshot: (config: MigrationConfig) => postStage("/api/migration/lm1-transfer-snapshot", config),
-  lm2Merge: (config: MigrationConfig) => postStage("/api/migration/lm2-merge", config),
-  validate: (config: MigrationConfig) => postStage("/api/migration/validate", config),
-  grafanaCheck: (config: MigrationConfig) => postStage("/api/migration/grafana-check", config),
-  proofUrl: (migrationId: string) => `${API_BASE}/api/migration/proof/${migrationId}`,
+  precheck: (config: MigrationConfig) =>
+    postStage("/api/migration/precheck", config),
+
+  backupCreate: (config: MigrationConfig) =>
+    postStage("/api/migration/lm2-backup", config),
+
+  lm1CreateSnapshot: (config: MigrationConfig) =>
+    postStage("/api/migration/lm1-create-snapshot", config),
+
+  // Custom range block migration
+  lm1RangeManifest: (config: MigrationConfig) =>
+    postStage("/api/migration/lm1-range-manifest", config),
+
+  transferRangeBlocks: (config: MigrationConfig) =>
+    postStage("/api/migration/transfer-range-blocks", config),
+
+  mergeRangeBlocks: (config: MigrationConfig) =>
+    postStage("/api/migration/merge-range-blocks", config),
+
+  lm2CleanupOldSource: (config: MigrationConfig) =>
+    postStage("/api/migration/lm2-cleanup-old-source", config),
+
+  lm1TransferSnapshot: (config: MigrationConfig) =>
+    postStage("/api/migration/lm1-transfer-snapshot", config),
+
+  lm2Merge: (config: MigrationConfig) =>
+    postStage("/api/migration/lm2-merge", config),
+
+  validate: (config: MigrationConfig) =>
+    postStage("/api/migration/validate", config),
+
+  grafanaCheck: (config: MigrationConfig) =>
+    postStage("/api/migration/grafana-check", config),
+
+  proofUrl: (migrationId: string) =>
+    `${API_BASE}/api/migration/proof/${migrationId}`,
 };

@@ -73,6 +73,9 @@ type StageKey =
   | "precheck"
   | "backup"
   | "snapshot"
+  | "rangeManifest"
+  | "rangeTransfer"
+  | "rangeMerge"
   | "cleanup"
   | "transfer"
   | "merge"
@@ -83,6 +86,9 @@ const stageLabels: Record<StageKey, string> = {
   precheck: "Pre-checks",
   backup: "Target backup",
   snapshot: "Source snapshot",
+  rangeManifest: "Range manifest",
+  rangeTransfer: "Range transfer",
+  rangeMerge: "Range merge",
   cleanup: "Target cleanup",
   transfer: "Snapshot transfer",
   merge: "Target merge",
@@ -105,8 +111,6 @@ function updateNested<T extends object>(obj: T, path: string[], value: string): 
 function toDateTimeLocal(value?: string | null) {
   if (!value) return "";
 
-  // Converts: 2026-05-12 00:00:00 +0600
-  // To:       2026-05-12T00:00
   const match = value.match(
     /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/
   );
@@ -129,8 +133,6 @@ function getLocalTimezoneOffset() {
 function fromDateTimeLocal(value: string) {
   if (!value) return "";
 
-  // Converts: 2026-05-12T00:00
-  // To:       2026-05-12 00:00:00 +0600
   const [date, time] = value.split("T");
 
   return `${date} ${time}:00 ${getLocalTimezoneOffset()}`;
@@ -403,6 +405,12 @@ export default function Page() {
         result = await migrationApi.backupCreate(configToSend);
       } else if (stage === "snapshot") {
         result = await migrationApi.lm1CreateSnapshot(configToSend);
+      } else if (stage === "rangeManifest") {
+        result = await migrationApi.lm1RangeManifest(configToSend);
+      } else if (stage === "rangeTransfer") {
+        result = await migrationApi.transferRangeBlocks(configToSend);
+      } else if (stage === "rangeMerge") {
+        result = await migrationApi.mergeRangeBlocks(configToSend);
       } else if (stage === "cleanup") {
         result = await migrationApi.lm2CleanupOldSource(configToSend);
       } else if (stage === "transfer") {
@@ -559,7 +567,7 @@ export default function Page() {
               <Field
                 label="Source Prometheus path"
                 value={config.source_prom_path}
-                placeholder="Example: /var/lib/prometheus"
+                placeholder="Example: /var/lib/prometheus/metrics2"
                 onChange={(v) => set("source_prom_path", v)}
               />
 
@@ -625,8 +633,9 @@ export default function Page() {
               <Field
                 label="Target Prometheus path"
                 value={config.target_prom_path}
-                placeholder="Example: /var/lib/prometheus"
+                placeholder="Example: /data"
                 onChange={(v) => set("target_prom_path", v)}
+                help="Use the real active LM2 Prometheus path. For your LM2, this is /data."
               />
 
               <Field
@@ -639,8 +648,9 @@ export default function Page() {
               <Field
                 label="Target receive directory"
                 value={config.target_receive_dir}
-                placeholder="Example: /home/<TARGET_USER>/lm1-snapshot-direct"
+                placeholder="Example: /home/iperf/old_data_range"
                 onChange={(v) => set("target_receive_dir", v)}
+                help="For custom range, use a separate folder such as /home/iperf/old_data_range."
               />
 
               <Field
@@ -664,10 +674,22 @@ export default function Page() {
                 }
                 options={[
                   { label: "Custom", value: "custom" },
-                  { label: "PoC example: 2026-05-12 to 2026-05-13", value: "poc_may12" },
-                  { label: "Production example: 2021 to March 2024", value: "prod_2021_mar2024" },
-                  { label: "Last 24 hours - manually enter timestamps", value: "last_24h" },
-                  { label: "Last 7 days - manually enter timestamps", value: "last_7d" },
+                  {
+                    label: "PoC example: 2026-05-12 to 2026-05-13",
+                    value: "poc_may12",
+                  },
+                  {
+                    label: "Production example: 2021 to March 2024",
+                    value: "prod_2021_mar2024",
+                  },
+                  {
+                    label: "Last 24 hours - manually enter timestamps",
+                    value: "last_24h",
+                  },
+                  {
+                    label: "Last 7 days - manually enter timestamps",
+                    value: "last_7d",
+                  },
                 ]}
                 help="Choose a preset or keep Custom and enter exact timestamps."
               />
@@ -675,7 +697,7 @@ export default function Page() {
               <Field
                 label="Prometheus binary"
                 value={config.prom_bin}
-                placeholder="Example: /usr/local/bin/prometheus"
+                placeholder="Example: /usr/local/bin/prometheus or /usr/bin/prometheus"
                 onChange={(v) => set("prom_bin", v)}
               />
 
@@ -774,6 +796,41 @@ export default function Page() {
 
             <div className="danger-zone">
               <div>
+                <strong>Custom range block transfer</strong>
+                <p>
+                  Use this instead of full snapshot when you want to transfer only
+                  the selected historical time range. It selects TSDB blocks using
+                  Historical data start/end.
+                </p>
+              </div>
+
+              <ActionButton
+                variant="secondary"
+                onClick={() => runStage("rangeManifest")}
+                disabled={!!running || !config.lm1_data_start || !config.lm1_data_end}
+              >
+                <DatabaseBackup size={16} /> Create Range Block Manifest
+              </ActionButton>
+
+              <ActionButton
+                variant="cyan"
+                onClick={() => runStage("rangeTransfer")}
+                disabled={!!running || !config.lm1_data_start || !config.lm1_data_end}
+              >
+                <ArrowRightLeft size={16} /> Transfer Range Blocks
+              </ActionButton>
+
+              <ActionButton
+                variant="primary"
+                onClick={() => runStage("rangeMerge")}
+                disabled={!!running || !config.lm1_data_start || !config.lm1_data_end}
+              >
+                <Layers3 size={16} /> Merge Range Blocks into Target
+              </ActionButton>
+            </div>
+
+            <div className="danger-zone">
+              <div>
                 <strong>Optional cleanup before re-import</strong>
                 <p>
                   This deletes existing {sourceLabel}-labelled data from {targetName}.
@@ -793,7 +850,6 @@ export default function Page() {
                 onClick={() => runStage("cleanup")}
                 disabled={
                   !!running ||
-                  !config.source_env_old ||
                   !config.target.name ||
                   config.cleanup_confirmation !== cleanupConfirmText
                 }
@@ -868,10 +924,10 @@ export default function Page() {
 
         <div className="card mini">
           <DatabaseBackup size={20} />
-          <h3>Sample-count proof</h3>
+          <h3>Custom range transfer</h3>
           <p>
-            The backend stores before and after counts and compares source-labelled
-            samples after the merge.
+            The range workflow selects only TSDB blocks that overlap the selected
+            historical start and end time.
           </p>
         </div>
 
@@ -879,8 +935,8 @@ export default function Page() {
           <BarChart3 size={20} />
           <h3>Grafana proof</h3>
           <p>
-            Confirm one Prometheus datasource and query both source_env labels from
-            the target.
+            Confirm one Prometheus datasource and query the migrated data from the
+            target.
           </p>
         </div>
       </section>
