@@ -799,15 +799,28 @@ if curl -fsS "$TARGET_PROMETHEUS_URL/-/ready" >/dev/null 2>&1; then
   ACTIVE_PATH=$(curl -s "$TARGET_PROMETHEUS_URL/api/v1/status/flags" | jq -r '.data["storage.tsdb.path"] // empty' || true)
 
   if [ -n "$ACTIVE_PATH" ]; then
-    NORMALIZED_ACTIVE="${ACTIVE_PATH%/}"
-    NORMALIZED_TARGET="${TARGET_PATH%/}"
+    TARGET_ABS=$(sudo readlink -f "$TARGET_PATH")
 
-    if [ "$NORMALIZED_ACTIVE" != "$NORMALIZED_TARGET" ]; then
+    if [ "${ACTIVE_PATH#/}" != "$ACTIVE_PATH" ]; then
+      ACTIVE_ABS=$(sudo readlink -f "$ACTIVE_PATH")
+    else
+      PROM_PID=$(pgrep -f '[p]rometheus' | head -1 || true)
+
+      if [ -n "$PROM_PID" ]; then
+        PROM_CWD=$(sudo readlink -f "/proc/$PROM_PID/cwd")
+        ACTIVE_ABS=$(sudo readlink -f "$PROM_CWD/$ACTIVE_PATH")
+      else
+        ACTIVE_ABS=$(sudo readlink -f "$ACTIVE_PATH")
+      fi
+    fi
+
+    echo "Configured target_prom_path: $TARGET_PATH"
+    echo "Active Prometheus path:      $ACTIVE_PATH"
+    echo "Resolved configured path:    $TARGET_ABS"
+    echo "Resolved active path:        $ACTIVE_ABS"
+
+    if [ "$ACTIVE_ABS" != "$TARGET_ABS" ]; then
       echo "ERROR: target_prom_path does not match active Prometheus storage path."
-      echo "Configured target_prom_path: $TARGET_PATH"
-      echo "Active Prometheus path:   $ACTIVE_PATH"
-      echo "Normalized configured:    $NORMALIZED_TARGET"
-      echo "Normalized active:        $NORMALIZED_ACTIVE"
       exit 87
     fi
   fi
