@@ -68,7 +68,7 @@ hostname
 
 printf '\\n=== Source identity ===\\n'
 ACTUAL_HOSTNAME=$(hostname)
-EXPECTED_HOSTNAME={config.source.expected_hostname!r}
+EXPECTED_HOSTNAME={(config.source.expected_hostname or "")!r}
 
 echo "Actual hostname: $ACTUAL_HOSTNAME"
 echo "Expected hostname: ${{EXPECTED_HOSTNAME:-not configured}}"
@@ -114,7 +114,7 @@ hostname
 
 printf '\\n=== Target identity ===\\n'
 ACTUAL_HOSTNAME=$(hostname)
-EXPECTED_HOSTNAME={config.target.expected_hostname!r}
+EXPECTED_HOSTNAME={(config.target.expected_hostname or "")!r}
 
 echo "Actual hostname: $ACTUAL_HOSTNAME"
 echo "Expected hostname: ${{EXPECTED_HOSTNAME:-not configured}}"
@@ -453,23 +453,163 @@ echo "=== Snapshot transfer completed ==="
             output = f"Snapshot transfer error: {e}"
         return self._result(config, migration_id, "lm1_transfer_snapshot", "Transfer Snapshot to LM2", started_at, ok, output)
 
-    def lm2_cleanup_old_source(self, config: MigrationConfig) -> CommandResult:
-        migration_id = config.migration_id or self.proof_service.new_migration_id()
-        started_at = _now()
+    # def lm2_cleanup_old_source(self, config: MigrationConfig) -> CommandResult:
+    #     migration_id = config.migration_id or self.proof_service.new_migration_id()
+    #     started_at = _now()
 
-        # Cleanup is disabled for this no-label migration mode.
-        # Your old LM1 Prometheus data has no source_env label, so delete_series
-        # cannot safely identify only old LM1 data on the target.
-        # Skip the Optional Cleanup button for this migration.
-        return self._result(
-            config,
-            migration_id,
-            "lm2_cleanup_old_source",
-            "Optional LM2 Cleanup",
-            started_at,
-            False,
-            "Cleanup is disabled in no-label mode. Skip this step because the old Prometheus data has no source_env label.",
-        )
+    #     # Cleanup is disabled for this no-label migration mode.
+    #     # Your old LM1 Prometheus data has no source_env label, so delete_series
+    #     # cannot safely identify only old LM1 data on the target.
+    #     # Skip the Optional Cleanup button for this migration.
+    #     return self._result(
+    #         config,
+    #         migration_id,
+    #         "lm2_cleanup_old_source",
+    #         "Optional LM2 Cleanup",
+    #         started_at,
+    #         False,
+    #         "Cleanup is disabled in no-label mode. Skip this step because the old Prometheus data has no source_env label.",
+    #     )
+
+    def lm2_cleanup_old_source(self, config: MigrationConfig) -> CommandResult:
+      migration_id = config.migration_id or self.proof_service.new_migration_id()
+      started_at = _now()
+
+      expected = f"DELETE {config.source_env_old} FROM {config.target.name}"
+      if (config.cleanup_confirmation or "").strip() != expected:
+          return self._result(
+              config,
+              migration_id,
+              "lm2_cleanup_old_source",
+              "Optional LM2 Cleanup",
+              started_at,
+              False,
+              f"Confirmation mismatch. Type exactly: {expected}",
+          )
+
+      sudo_pass = config.target.sudo_password or config.target.ssh_password or ""
+      sudo_auth = sudo_prefix(sudo_pass)
+
+      script = f"""
+  set -euo pipefail
+
+  SOURCE_ENV_OLD={config.source_env_old!r}
+  OLD_SELECTOR=$(printf '{{source_env="%s"}}' "$SOURCE_ENV_OLD")
+  LM1_DATA_START={config.lm1_data_start!r}
+  LM1_DATA_END={config.lm1_data_end!r}
+
+  START_TS=$(date -d "$LM1_DATA_START" +%s)
+  END_TS=$(date -d "$LM1_DATA_END" +%s)
+  RANGE_SEC=$((END_TS - START_TS))
+
+  if [ "$RANGE_SEC" -le 0 ]; then
+    echo "ERROR: Invalid cleanup time range. End must be after start."
+    exit 31
+  fi
+
+  require_2xx() {{
+    local name="$1"
+    local code="$2"
+    if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+      echo "ERROR: $name failed with HTTP status $code"
+      exit 32
+    fi
+  }}
+
+  query_count() {{
+    curl -sG http://localhost:9090/api/v1/query \
+      --data-urlencode "query=sum(count_over_time(up${{OLD_SELECTOR}}[${{RANGE_SEC}}s]))" \
+      --data-urlencode "time=${{END_TS}}" \
+      | jq -r '.data.result[0].value[1] // "0"'
+  }}
+
+  echo "=== Authenticate sudo on target ==="
+  {sudo_auth}
+
+  echo "=== Target cleanup enabled ==="
+  echo "Mode: label-based Prometheus delete_series"
+  echo "Selector: $OLD_SELECTOR"
+  echo "Range start: $LM1_DATA_START ($START_TS)"
+  echo "Range end:   $LM1_DATA_END ($END_TS)"
+  echo
+  echo "WARNING: This only deletes series that have source_env=\\"$SOURCE_ENV_OLD\\"."
+  echo "If older imported LM1 data has no source_env label, this cleanup will find 0 series and will not delete no-label LM2 data."
+  echo
+
+  echo "=== Check target Prometheus health before cleanup ==="
+  curl -fsS http://localhost:9090/-/healthy
+  echo
+  curl -fsS http://localhost:9090/-/ready
+  echo
+
+  echo "=== Count existing source-labelled data on target before cleanup ==="
+  BEFORE_COUNT=$(query_count)
+  echo "$BEFORE_COUNT" | tee /tmp/lm1_count_before_cleanup_on_lm2.txt
+
+  if [ "$BEFORE_COUNT" = "0" ] || [ "$BEFORE_COUNT" = "0.0" ]; then
+    echo "No matching source-labelled data was found in the selected range."
+    echo "The delete_series request will still run safely with selector: $OLD_SELECTOR"
+  fi
+
+  echo "=== Delete old source-labelled series from target for the selected range ==="
+  DELETE_CODE=$(curl -sS -o /tmp/delete_series_response.txt -w "%{{http_code}}" \
+    -X POST http://localhost:9090/api/v1/admin/tsdb/delete_series \
+    --data-urlencode "match[]=${{OLD_SELECTOR}}" \
+    --data-urlencode "start=${{START_TS}}" \
+    --data-urlencode "end=${{END_TS}}")
+  echo "delete_series HTTP status: $DELETE_CODE"
+  cat /tmp/delete_series_response.txt || true
+  require_2xx "delete_series" "$DELETE_CODE"
+
+  echo
+  echo "=== Clean tombstones ==="
+  CLEAN_CODE=$(curl -sS -o /tmp/clean_tombstones_response.txt -w "%{{http_code}}" \
+    -X POST http://localhost:9090/api/v1/admin/tsdb/clean_tombstones)
+  echo "clean_tombstones HTTP status: $CLEAN_CODE"
+  cat /tmp/clean_tombstones_response.txt || true
+  require_2xx "clean_tombstones" "$CLEAN_CODE"
+
+  echo
+  echo "=== Restart target Prometheus ==="
+  sudo systemctl restart prometheus
+  sleep 8
+  curl -fsS http://localhost:9090/-/healthy
+  echo
+  curl -fsS http://localhost:9090/-/ready
+  echo
+
+  echo "=== Verify source-labelled data was removed from target ==="
+  AFTER_COUNT=$(query_count)
+  echo "$AFTER_COUNT" | tee /tmp/lm1_count_after_cleanup_on_lm2.txt
+
+  if [ "$AFTER_COUNT" != "0" ] && [ "$AFTER_COUNT" != "0.0" ]; then
+    echo "ERROR: Matching source-labelled data still exists after cleanup."
+    echo "Before: $BEFORE_COUNT"
+    echo "After:  $AFTER_COUNT"
+    exit 33
+  fi
+
+  echo "Cleanup completed."
+  """
+
+      try:
+          with SSHRunner(config.target) as tgt:
+              res = tgt.run_bash(script, timeout=1200)
+              ok = res.exit_code == 0
+              output = res.combined
+      except Exception as e:
+          ok = False
+          output = f"Cleanup error: {e}"
+
+      return self._result(
+          config,
+          migration_id,
+          "lm2_cleanup_old_source",
+          "Optional LM2 Cleanup",
+          started_at,
+          ok,
+          output,
+      )
 
     def lm2_merge(self, config: MigrationConfig) -> CommandResult:
         migration_id = config.migration_id or self.proof_service.new_migration_id()

@@ -7,78 +7,120 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class HostConfig(BaseModel):
-    name: str = Field(
-        default="LM1",
-        description="Friendly machine name, for example LM1, LM2, Server 107, or Server 105",
-    )
-    host: str = Field(
-        default="192.168.1.160",
-        description="IP address or DNS hostname",
-    )
-    user: str = Field(
-        default="student2",
-        description="SSH username",
-    )
-    ssh_password: Optional[str] = Field(
-        default=None,
-        description="SSH password. Prefer SSH keys in production.",
-    )
-    ssh_key_path: Optional[str] = Field(
-        default=None,
-        description="Private SSH key path on the backend server",
-    )
-    sudo_password: Optional[str] = Field(
-        default=None,
-        description="Sudo password. If empty, ssh_password is reused when available.",
-    )
-    expected_hostname: Optional[str] = Field(
-        default="",
-        description="Optional hostname safety check before risky commands",
-    )
+    name: str = ""
+    host: str = ""
+    user: str = ""
+    ssh_password: Optional[str] = None
+    sudo_password: Optional[str] = None
+    ssh_key_path: Optional[str] = None
+    expected_hostname: Optional[str] = None
 
     @field_validator("name", "host", "user")
     @classmethod
-    def required_string(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            raise ValueError("This field cannot be empty")
-        return value
+    def strip_text(cls, value: str) -> str:
+        return value.strip()
 
-    @field_validator("expected_hostname")
+    @field_validator("ssh_password", "sudo_password", "ssh_key_path", "expected_hostname")
     @classmethod
-    def normalize_optional_string(cls, value: Optional[str]) -> str:
-        return (value or "").strip()
+    def normalize_optional_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
+
+
+class CommandResult(BaseModel):
+    ok: bool
+    title: str
+    output: str
+    started_at: datetime
+    finished_at: datetime
+    migration_id: str
+    proof: dict[str, Any] = Field(default_factory=dict)
 
 
 class MigrationConfig(BaseModel):
     migration_id: Optional[str] = None
 
-    source: HostConfig = Field(default_factory=HostConfig)
+    source: HostConfig = Field(
+        default_factory=lambda: HostConfig(
+            name="LM1",
+            host="",
+            user="",
+        )
+    )
     target: HostConfig = Field(
         default_factory=lambda: HostConfig(
             name="LM2",
-            host="192.168.1.102",
-            user="student3",
+            host="",
+            user="",
         )
     )
 
-    # Prometheus labels
+    # Labels used to identify imported data.
+    # source_env_old is added to imported LM1 data.
+    # source_env_new is optional/general metadata for target/live side.
     source_env_old: str = "lm1"
     source_env_new: str = "lm2"
 
-    # Prometheus paths
-    source_prom_path: str = "/var/lib/prometheus"
-    target_prom_path: str = "/var/lib/prometheus"
-    target_receive_dir: str = "/home/student3/lm1-snapshot-direct"
-    target_backup_dir: str = "/home/student3/prometheus-migration-backups"
+    # Optional extra imported-data labels.
+    # These make future cleanup safer.
+    imported_migration_origin: str = "legacy"
+    imported_source_host: str = ""
 
-    # Prometheus binary/settings
-    prom_bin: str = "/usr/local/bin/prometheus"
+    # Prometheus paths.
+    # These must be configured per machine.
+    # Example LM1 real path: /var/lib/prometheus/metrics2
+    # Example LM2 path:      /var/lib/prometheus
+    source_prom_path: str = ""
+    target_prom_path: str = ""
+    target_receive_dir: str = ""
+    target_backup_dir: str = ""
+
+    # Prometheus binary/settings.
+    prom_bin: str = "/usr/bin/prometheus"
+    promtool_bin: str = ""
     prom_retention_time: str = "10y"
 
-    # Historical data range
-    lm1_data_start: str = "2026-05-12 00:00:00 +0600"
-    lm1_data_end: str = "2026-05-13 00:00:00 +0600"
+    # Prometheus local API URLs as seen from each SSH host.
+    source_prometheus_url: str = "http://localhost:9090"
+    target_prometheus_url: str = "http://localhost:9090"
+
+    # Linux service/user names.
+    prometheus_service_name: str = "prometheus"
+    prometheus_system_user: str = "prometheus"
+
+    # Temporary no-scrape Prometheus used only for reading LM1 TSDB
+    # when normal LM1 Prometheus is not running.
+    exact_range_temp_prometheus_url: str = "http://127.0.0.1:9090"
+    exact_range_temp_listen_address: str = "127.0.0.1:9090"
+
+    # Exact range export settings.
+    # Use LM1 scrape interval for raw-like migration.
+    exact_range_step_seconds: int = 15
+
+    # 0 means unlimited. Example: 86400 means max 24 hours.
+    exact_range_max_seconds: int = 0
+
+    # Prometheus API export chunk size.
+    # 3600 = 1-hour chunks.
+    exact_range_chunk_seconds: int = 3600
+
+    # Metric selector for exact-range export.
+    # Default exports all metrics.
+    # Faster examples:
+    #   up
+    #   {job="node_exporter"}
+    #   {job="Node"}
+    exact_range_match_selector: str = '{__name__!=""}'
+
+    # Skip full TSDB analyze during merge. Full analyze can be slow.
+    exact_range_analyze_after_merge: bool = False
+
+    # User-defined historical data range.
+    # Must come from GUI.
+    lm1_data_start: str = ""
+    lm1_data_end: str = ""
 
     date_preset: Literal[
         "custom",
@@ -97,54 +139,51 @@ class MigrationConfig(BaseModel):
 
     @staticmethod
     def parse_datetime_flexible(value: str) -> datetime:
-        """
-        Accepts both backend-friendly and browser datetime-local formats.
-
-        Supported examples:
-        - 2026-05-12 00:00:00 +0600
-        - 2026-05-12T00:00
-        - 2026-05-12T00:00:00
-        - 2026-05-12
-        """
         value = value.strip()
 
         formats = [
             "%Y-%m-%d %H:%M:%S %z",
-            "%Y-%m-%dT%H:%M",
+            "%Y-%m-%dT%H:%M:%S%z",
             "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%dT%H:%M",
+            "%Y-%m-%d %H:%M:%S",
             "%Y-%m-%d",
         ]
 
         for fmt in formats:
             try:
                 parsed = datetime.strptime(value, fmt)
-
-                # Browser datetime-local values usually have no timezone.
-                # Use UTC internally for validation only.
                 if parsed.tzinfo is None:
                     parsed = parsed.replace(tzinfo=timezone.utc)
-
                 return parsed
             except ValueError:
                 continue
 
-        raise ValueError(
-            "Invalid date format. Supported formats include: "
-            "YYYY-MM-DD HH:MM:SS +0600, YYYY-MM-DDTHH:MM, "
-            "YYYY-MM-DDTHH:MM:SS, or YYYY-MM-DD."
-        )
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed
+        except ValueError as exc:
+            raise ValueError(
+                "Invalid date format. Supported formats include: "
+                "YYYY-MM-DD HH:MM:SS +0600, YYYY-MM-DDTHH:MM, "
+                "YYYY-MM-DDTHH:MM:SS, or YYYY-MM-DD."
+            ) from exc
 
     @field_validator(
         "source_env_old",
         "source_env_new",
-        "source_prom_path",
-        "target_prom_path",
-        "target_receive_dir",
-        "target_backup_dir",
+        "imported_migration_origin",
         "prom_bin",
         "prom_retention_time",
-        "lm1_data_start",
-        "lm1_data_end",
+        "source_prometheus_url",
+        "target_prometheus_url",
+        "prometheus_service_name",
+        "prometheus_system_user",
+        "exact_range_temp_prometheus_url",
+        "exact_range_temp_listen_address",
+        "exact_range_match_selector",
         "grafana_url",
         "grafana_user",
     )
@@ -155,20 +194,71 @@ class MigrationConfig(BaseModel):
             raise ValueError("This field cannot be empty")
         return value
 
-    @field_validator("snapshot_name", "cleanup_confirmation")
+    @field_validator(
+        "source_prom_path",
+        "target_prom_path",
+        "target_receive_dir",
+        "target_backup_dir",
+        "lm1_data_start",
+        "lm1_data_end",
+        "imported_source_host",
+        "promtool_bin",
+    )
+    @classmethod
+    def strip_paths_and_range(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("snapshot_name", "cleanup_confirmation", "grafana_password")
     @classmethod
     def normalize_optional_fields(cls, value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
-        return value.strip()
+        value = value.strip()
+        return value or None
 
     @model_validator(mode="after")
     def validate_config(self) -> "MigrationConfig":
+        if not self.source.name:
+            raise ValueError("Source name is required")
+
+        if not self.source.host:
+            raise ValueError("Source SSH host is required")
+
+        if not self.source.user:
+            raise ValueError("Source SSH user is required")
+
+        if not self.target.name:
+            raise ValueError("Target name is required")
+
+        if not self.target.host:
+            raise ValueError("Target SSH host is required")
+
+        if not self.target.user:
+            raise ValueError("Target SSH user is required")
+
         if self.source_env_old == self.source_env_new:
             raise ValueError("source_env_old and source_env_new must be different")
 
         if self.source.host == self.target.host and self.source.user == self.target.user:
             raise ValueError("Source and target SSH destinations should not be identical")
+
+        if not self.source_prom_path:
+            raise ValueError("Source Prometheus path is required")
+
+        if not self.target_prom_path:
+            raise ValueError("Target Prometheus path is required")
+
+        if not self.target_receive_dir:
+            raise ValueError("Target receive directory is required")
+
+        if not self.target_backup_dir:
+            raise ValueError("Target backup directory is required")
+
+        if not self.lm1_data_start:
+            raise ValueError("Please select LM1 data start time in the GUI")
+
+        if not self.lm1_data_end:
+            raise ValueError("Please select LM1 data end time in the GUI")
 
         start_dt = self.parse_datetime_flexible(self.lm1_data_start)
         end_dt = self.parse_datetime_flexible(self.lm1_data_end)
@@ -176,11 +266,29 @@ class MigrationConfig(BaseModel):
         if start_dt >= end_dt:
             raise ValueError("lm1_data_start must be before lm1_data_end")
 
+        if self.exact_range_step_seconds <= 0:
+            raise ValueError("exact_range_step_seconds must be positive")
+
+        if self.exact_range_max_seconds < 0:
+            raise ValueError("exact_range_max_seconds cannot be negative")
+
+        if self.exact_range_chunk_seconds <= 0:
+            raise ValueError("exact_range_chunk_seconds must be positive")
+
+        if not self.source_prometheus_url.startswith(("http://", "https://")):
+            raise ValueError("source_prometheus_url must start with http:// or https://")
+
+        if not self.target_prometheus_url.startswith(("http://", "https://")):
+            raise ValueError("target_prometheus_url must start with http:// or https://")
+
+        if not self.exact_range_temp_prometheus_url.startswith(("http://", "https://")):
+            raise ValueError("exact_range_temp_prometheus_url must start with http:// or https://")
+
         dangerous_retention_values = {"15d", "7d", "1d"}
         if self.prom_retention_time.strip() in dangerous_retention_values:
             raise ValueError(
                 "Retention time is too short for historical migration. "
-                "Use 5y, 10y, or another value suitable for multi-year data."
+                "Use 5y, 10y, or another value suitable for historical data."
             )
 
         return self
@@ -203,21 +311,3 @@ class MigrationConfig(BaseModel):
         data["cleanup_confirmation"] = None
 
         return data
-
-
-class CommandResult(BaseModel):
-    ok: bool
-    title: str
-    output: str
-    started_at: datetime
-    finished_at: datetime
-    migration_id: str
-    proof: dict[str, Any] = Field(default_factory=dict)
-
-
-class MigrationHistoryItem(BaseModel):
-    migration_id: str
-    created_at: datetime
-    stage: str
-    ok: bool
-    proof: dict[str, Any] = Field(default_factory=dict)
