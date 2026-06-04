@@ -223,19 +223,24 @@ if [ ! -d "$LM1_PROM_PATH" ]; then
   exit 73
 fi
 
-if [ -n "$PROMTOOL_BIN" ] && [ -x "$PROMTOOL_BIN" ]; then
+if [ -n "$PROMTOOL_BIN" ] && [ -x "$PROMTOOL_BIN" ] && "$PROMTOOL_BIN" tsdb --help >/dev/null 2>&1; then
   PROMTOOL="$PROMTOOL_BIN"
-elif command -v promtool >/dev/null 2>&1 && promtool tsdb --help >/dev/null 2>&1; then
+elif command -v promtool >/dev/null 2>&1 && "$(command -v promtool)" tsdb --help >/dev/null 2>&1; then
   PROMTOOL="$(command -v promtool)"
-elif [ -x "$(dirname "$PROM_BIN")/promtool" ]; then
+elif [ -x "$(dirname "$PROM_BIN")/promtool" ] && "$(dirname "$PROM_BIN")/promtool" tsdb --help >/dev/null 2>&1; then
   PROMTOOL="$(dirname "$PROM_BIN")/promtool"
-elif [ -x /usr/local/bin/promtool ]; then
+elif [ -x /home/testhouse/promtool-new ] && /home/testhouse/promtool-new tsdb --help >/dev/null 2>&1; then
+  PROMTOOL=/home/testhouse/promtool-new
+elif [ -x /usr/local/bin/promtool-new ] && /usr/local/bin/promtool-new tsdb --help >/dev/null 2>&1; then
+  PROMTOOL=/usr/local/bin/promtool-new
+elif [ -x /usr/local/bin/promtool ] && /usr/local/bin/promtool tsdb --help >/dev/null 2>&1; then
   PROMTOOL=/usr/local/bin/promtool
 elif [ -x /usr/bin/promtool ] && /usr/bin/promtool tsdb --help >/dev/null 2>&1; then
   PROMTOOL=/usr/bin/promtool
 else
   echo "ERROR: compatible promtool with tsdb support not found."
-  echo "Install/copy a newer Prometheus promtool binary and set promtool_bin in config."
+  echo "Current system promtool may be too old."
+  echo "Set Promtool binary path in GUI, for example: /home/testhouse/promtool-new"
   exit 74
 fi
 

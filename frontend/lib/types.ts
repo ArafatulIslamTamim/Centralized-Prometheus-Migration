@@ -20,6 +20,7 @@ export type MigrationConfig = {
   target_backup_dir: string;
   prom_bin: string;
   prom_retention_time: string;
+  promtool_bin: string;
   exact_range_step_seconds: number | string;
   lm1_data_start: string;
   lm1_data_end: string;

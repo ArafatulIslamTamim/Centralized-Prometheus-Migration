@@ -49,6 +49,7 @@ const defaultConfig: MigrationConfig = {
   target_receive_dir: "",
   target_backup_dir: "",
   prom_bin: "/usr/local/bin/prometheus",
+  promtool_bin: "",
   prom_retention_time: "10y",
   exact_range_step_seconds: 15,
   lm1_data_start: "",
@@ -513,8 +514,27 @@ export default function Page() {
                   { label: "PoC full day: 2026-05-12", value: "poc_may12" },
                 ]}
               />
-              <Field label="Prometheus binary" value={config.prom_bin} placeholder="/usr/local/bin/prometheus" onChange={(v) => set("prom_bin", v)} />
-              <DateTimeField label="Historical data start" value={config.lm1_data_start} onChange={(v) => set("lm1_data_start", v)} help="Exact start time for LM1 export." />
+              <Field
+                label="Prometheus binary"
+                value={config.prom_bin}
+                placeholder="/usr/local/bin/prometheus"
+                onChange={(v) => set("prom_bin", v)}
+              />
+
+              <Field
+                label="Promtool binary path (optional)"
+                value={config.promtool_bin}
+                placeholder="/home/testhouse/promtool-new"
+                onChange={(v) => set("promtool_bin", v)}
+                help="Leave empty to auto-detect. Use this if system promtool is old."
+              />
+
+              <DateTimeField
+                label="Historical data start"
+                value={config.lm1_data_start}
+                onChange={(v) => set("lm1_data_start", v)}
+                help="Exact start time for LM1 export."
+              />
               <DateTimeField label="Historical data end" value={config.lm1_data_end} onChange={(v) => set("lm1_data_end", v)} help="Exact end time for LM1 export." />
               <Field label="Exact export step seconds" value={config.exact_range_step_seconds} type="number" placeholder="15" onChange={(v) => set("exact_range_step_seconds", v)} help="Use your LM1 scrape interval, usually 15." />
               <Field label="Retention time" value={config.prom_retention_time} placeholder="10y" onChange={(v) => set("prom_retention_time", v)} />
