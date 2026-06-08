@@ -1,0 +1,48 @@
+{
+  "source": {
+    "name": "Source",
+    "host": "",
+    "port": 22,
+    "user": "",
+    "ssh_password": "",
+    "ssh_key_path": "",
+    "ssh_key_passphrase": "",
+    "sudo_password": ""
+  },
+  "target": {
+    "name": "Target",
+    "host": "",
+    "port": 22,
+    "user": "",
+    "ssh_password": "",
+    "ssh_key_path": "",
+    "ssh_key_passphrase": "",
+    "sudo_password": ""
+  },
+  "prometheus": {
+    "source_temp_snapshot_port": 19090,
+    "source_url_from_source": "http://127.0.0.1:19090",
+    "source_tsdb_path": "/var/lib/prometheus/metrics2",
+    "source_snapshot_dir": "/var/lib/prometheus/metrics2/snapshots",
+    "target_url_from_target": "http://localhost:9090",
+    "target_data_path": "/data",
+    "target_staging_root": "",
+    "prometheus_service": "prometheus",
+    "prometheus_owner": "prometheus:prometheus"
+  },
+  "grafana": {
+    "enabled": false,
+    "source_url_from_controller": "",
+    "source_user": "admin",
+    "source_password": "",
+    "target_url_from_controller": "",
+    "target_user": "admin",
+    "target_password": "",
+    "import_tag": "testhouse-imported",
+    "extra_import_tags": ["testhouse"]
+  },
+  "record_dir_on_controller": "./records",
+  "record_dir_on_target": "",
+  "transfer_mode": "controller_sftp_bridge",
+  "ssh_strict_host_key_checking": false
+}

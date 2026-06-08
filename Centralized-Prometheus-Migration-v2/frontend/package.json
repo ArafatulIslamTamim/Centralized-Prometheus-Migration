@@ -1,0 +1,22 @@
+{
+  "name": "prometheus-safe-snapshot-gui-first-style",
+  "version": "4.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -H 0.0.0.0 -p 3001",
+    "build": "next build",
+    "start": "next start -H 0.0.0.0 -p 3001",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@types/node": "20.11.30",
+    "@types/react": "18.2.67",
+    "@types/react-dom": "18.2.22",
+    "lucide-react": "^0.468.0",
+    "next": "14.2.5",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "typescript": "5.4.5"
+  },
+  "devDependencies": {}
+}

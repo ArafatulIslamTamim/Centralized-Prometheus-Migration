@@ -25,3 +25,8 @@ backend/storage/proofs/
 # Generated backend files
 # Environment files
 # Generated migration files
+
+# Local runtime/generated files
+config.json
+**/config.json
+**/backend/records/

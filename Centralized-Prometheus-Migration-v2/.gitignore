@@ -1,0 +1,7 @@
+backend/.venv/
+frontend/node_modules/
+frontend/.next/
+config.json
+records/
+*.pyc
+__pycache__/
